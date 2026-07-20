@@ -35,7 +35,7 @@ services:
       - DB_NAME=life_circle_15min
       - DB_SSLMODE=disable
       - GIN_MODE=release
-      - AMAP_KEY=b8c46da854c65a844724a50cbaa9ca54
+      - AMAP_KEY=your_key
     ports:
       - "8080:8080"
     depends_on:
