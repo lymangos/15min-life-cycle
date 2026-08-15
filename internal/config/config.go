@@ -44,7 +44,11 @@ func (c DatabaseConfig) DSN() string {
 
 // Load 加载配置（从环境变量）
 func Load() (*Config, error) {
-	amapKey := getEnv("AMAP_KEY", "b8c46da854c65a844724a50cbaa9ca54")
+	// 默认值必须为空。这里原本硬编码了一把真实的高德 Key，有两个问题：
+	// 一是密钥随源码进入公开仓库；二是下面的 getEnv 把空串也当作"未设置"，
+	// 于是 AMAP_KEY= （有意留空以禁用高德）会被静默回落成"带着这把 key 启用"。
+	// 密钥一律由环境变量提供，不进源码、不进二进制。
+	amapKey := getEnv("AMAP_KEY", "")
 	return &Config{
 		Server: ServerConfig{
 			Addr: getEnv("SERVER_ADDR", ":8080"),
