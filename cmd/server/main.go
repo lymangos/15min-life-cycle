@@ -34,6 +34,7 @@ func main() {
 	isochroneService := service.NewIsochroneService(db)
 	poiService := service.NewPOIService(db)
 	evaluationService := service.NewEvaluationService(db, poiService, cfg)
+	coverageService := service.NewCoverageService(db)
 
 	// 打印高德API状态
 	if cfg.Amap.Enabled {
@@ -57,11 +58,12 @@ func main() {
 	// API 路由
 	apiGroup := router.Group("/api/v1")
 	{
-		handler := api.NewHandler(isochroneService, poiService, evaluationService, cfg)
+		handler := api.NewHandler(isochroneService, poiService, evaluationService, coverageService, cfg)
 		apiGroup.POST("/isochrone", handler.CalculateIsochrone)
 		apiGroup.POST("/analyze", handler.AnalyzePoint)
 		apiGroup.GET("/poi/categories", handler.GetPOICategories)
 		apiGroup.GET("/evaluation/standards", handler.GetEvaluationStandards)
+		apiGroup.GET("/coverage", handler.GetCoverage)
 	}
 
 	// 启动服务器

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ type Handler struct {
 	isochroneService  *service.IsochroneService
 	poiService        *service.POIService
 	evaluationService *service.EvaluationService
+	coverageService   *service.CoverageService
 	amapService       *service.AmapPOIService
 }
 
@@ -22,14 +24,47 @@ func NewHandler(
 	isoService *service.IsochroneService,
 	poiService *service.POIService,
 	evalService *service.EvaluationService,
+	covService *service.CoverageService,
 	cfg *config.Config,
 ) *Handler {
 	return &Handler{
 		isochroneService:  isoService,
 		poiService:        poiService,
 		evaluationService: evalService,
+		coverageService:   covService,
 		amapService:       service.NewAmapPOIService(cfg.Amap),
 	}
+}
+
+// GetCoverage 返回当前数据实际能分析的范围
+// GET /api/v1/coverage
+func (h *Handler) GetCoverage(c *gin.Context) {
+	cov, err := h.coverageService.Get(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "failed to get coverage",
+			"details": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, cov)
+}
+
+// rejectOutOfCoverage 把越界错误翻成 422 + 前端可直接展示的文案。
+// 返回 true 表示已经写过响应，调用方应当直接 return。
+func (h *Handler) rejectOutOfCoverage(c *gin.Context, err error) bool {
+	var oc *service.OutOfCoverageError
+	if !errors.As(err, &oc) {
+		return false
+	}
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"error":      "out_of_coverage",
+		"reason":     oc.Reason,
+		"message":    oc.Error(),
+		"distance_m": oc.DistanceM,
+		"coverage":   oc.Coverage,
+	})
+	return true
 }
 
 // CalculateIsochrone 计算等时圈
@@ -39,6 +74,18 @@ func (h *Handler) CalculateIsochrone(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "invalid request",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// 起点不在数据范围内就没有计算的意义，先挡掉，省得返回一个静默错误的等时圈
+	if err := h.coverageService.Check(c.Request.Context(), req.Lng, req.Lat); err != nil {
+		if h.rejectOutOfCoverage(c, err) {
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "coverage check failed",
 			"details": err.Error(),
 		})
 		return
@@ -63,6 +110,17 @@ func (h *Handler) AnalyzePoint(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "invalid request",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	if err := h.coverageService.Check(c.Request.Context(), req.Lng, req.Lat); err != nil {
+		if h.rejectOutOfCoverage(c, err) {
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "coverage check failed",
 			"details": err.Error(),
 		})
 		return
