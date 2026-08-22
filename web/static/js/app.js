@@ -6,42 +6,42 @@
 // 城市配置
 // ============================================
 
-const CITIES = {
-    hangzhou: {
-        name: '杭州',
-        center: [30.2741, 120.1551],
-        zoom: 14,
-        bounds: [[30.1, 119.9], [30.5, 120.5]],  // [[南, 西], [北, 东]]
-        description: '浙江省杭州市'
-    },
-    zhuji: {
-        name: '诸暨',
-        center: [29.85, 120.08],
-        zoom: 14,
-        bounds: [[29.6, 120.0], [29.9, 120.4]],
-        description: '浙江省诸暨市'
-    },
-    shenyang: {
-        name: '沈阳',
-        center: [41.80, 123.43],
-        zoom: 13,
-        bounds: [[41.65, 123.2], [41.95, 123.6]],
-        description: '辽宁省沈阳市'
-    }
+// 这里原本硬编码了杭州 / 诸暨 / 沈阳三个城市，每个都配了一个手写的 bounds。
+// 但库里其实只有一块按矩形从 OSM 裁出来的杭州路网（ways_vertices_pgr 的 extent），
+// 另外两个城市一条路都没有——选中它们只会得到一个静默错误的结果。
+// 现在范围由后端 /api/v1/coverage 提供，前端不再自己编造边界。
+// 下面这份只是接口未就绪时的兜底，数值与线上一致。
+const FALLBACK_COVERAGE = {
+    name: '杭州西湖区一带',
+    description: '按矩形裁取的 OSM 路网',
+    min_lng: 120.1109878, min_lat: 30.2018569,
+    max_lng: 120.2064578, max_lat: 30.2873602,
+    center_lng: 120.1587228, center_lat: 30.2446086,
+    span_lng_km: 9.2, span_lat_km: 9.5,
+    ways: 16287, vertices: 12310, pois: 2038,
+    snap_radius_m: 300
 };
+
+// 曾经在选择器里出现、但库中没有数据的城市。
+// 留成不可选项而不是直接删掉，是为了让"以前能选、现在不能"有个交代，
+// 免得用户以为选项消失是个 bug。
+const UNAVAILABLE_CITIES = ['诸暨', '沈阳'];
 
 // ============================================
 // 配置
 // ============================================
 
 const CONFIG = {
-    // 当前选中的城市
-    currentCity: 'hangzhou',
-    
-    // 默认地图中心 - 使用当前城市
-    get defaultCenter() { return CITIES[this.currentCity].center; },
-    get defaultZoom() { return CITIES[this.currentCity].zoom; },
-    get cityBounds() { return CITIES[this.currentCity].bounds; },
+    // 当前数据覆盖范围，启动时由 /api/v1/coverage 覆写
+    coverage: FALLBACK_COVERAGE,
+
+    get defaultCenter() { return [this.coverage.center_lat, this.coverage.center_lng]; },
+    get defaultZoom() { return 14; },
+    // Leaflet 用 [[南, 西], [北, 东]]
+    get cityBounds() {
+        const c = this.coverage;
+        return [[c.min_lat, c.min_lng], [c.max_lat, c.max_lng]];
+    },
     
     // API 端点
     apiBase: '/api/v1',
@@ -140,7 +140,9 @@ const state = {
     currentPOIsGeoJSON: null, // 当前 POI GeoJSON 对象（用于渲染）
     currentResult: null,     // 当前分析结果缓存
     radarChart: null,        // ECharts 雷达图实例
-    cityBoundsRect: null,    // 城市边界矩形
+    coverageRect: null,      // 可分析区域轮廓
+    coverageMask: null,      // 区域外的压暗遮罩
+    coverageTip: null,       // 贴在区域上边缘的标签
     baseLayers: null,        // 底图图层
     isMobile: false          // 是否移动端
 };
@@ -149,16 +151,70 @@ const state = {
 // 初始化
 // ============================================
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // 检测移动端
     state.isMobile = window.innerWidth <= 768;
-    
+
+    // 地图边界依赖真实数据范围，必须先拿到再建图
+    await loadCoverage();
+
     initMap();
     initEventListeners();
     initRadarChart();
     initCitySelector();
     initMobileControls();
 });
+
+/**
+ * 拉取真实数据覆盖范围。失败则沿用兜底值，不阻断页面。
+ */
+async function loadCoverage() {
+    try {
+        const res = await fetch(`${CONFIG.apiBase}/coverage`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const cov = await res.json();
+        if (typeof cov.min_lng === 'number' && cov.max_lng > cov.min_lng) {
+            CONFIG.coverage = cov;
+        }
+    } catch (err) {
+        console.warn('覆盖范围接口不可用，使用兜底值：', err);
+    }
+}
+
+/**
+ * 点是否落在可分析范围内
+ */
+function inCoverage(lat, lng) {
+    const c = CONFIG.coverage;
+    return lng >= c.min_lng && lng <= c.max_lng && lat >= c.min_lat && lat <= c.max_lat;
+}
+
+/**
+ * 越界就提示并闪一下区域轮廓，返回 true 表示调用方应当中止。
+ * what 用于拼文案，比如「该位置」「搜索结果」。
+ */
+function rejectOutside(lat, lng, what) {
+    if (inCoverage(lat, lng)) return false;
+    showToast(`${what}在可分析范围外，目前只有${CONFIG.coverage.name}有路网数据`, 'error');
+    flashCoverage();
+    return true;
+}
+
+/**
+ * 让区域轮廓闪两下，把「能点哪儿」指出来
+ */
+function flashCoverage() {
+    if (!state.coverageRect) return;
+    const rect = state.coverageRect;
+    let n = 0;
+    const timer = setInterval(() => {
+        rect.setStyle({ weight: n % 2 ? 2.5 : 6, color: n % 2 ? '#2563eb' : '#f59e0b' });
+        if (++n >= 6) {
+            clearInterval(timer);
+            rect.setStyle({ weight: 2.5, color: '#2563eb' });
+        }
+    }, 180);
+}
 
 /**
  * 初始化移动端控制
@@ -367,7 +423,9 @@ async function handleSearch(query) {
             // 选择第一个结果
             selectSearchResult(results[0]);
         } else {
-            showToast('未找到相关地址', 'error');
+            // 搜索已限定在覆盖范围内，空结果多半是因为目标不在框里
+            showToast(`在${CONFIG.coverage.name}范围内没找到「${query}」`, 'error');
+            flashCoverage();
         }
     } catch (error) {
         console.error('Search failed:', error);
@@ -380,7 +438,12 @@ async function handleSearch(query) {
  */
 async function searchAddress(query) {
     // 使用 OpenStreetMap Nominatim API（免费，无需 Key）
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&countrycodes=cn&limit=5&addressdetails=1`;
+    // viewbox + bounded=1 让 Nominatim 只返回框内结果，
+    // 省得用户搜到一个根本没法分析的地方再被拒绝
+    const c = CONFIG.coverage;
+    const viewbox = `${c.min_lng},${c.max_lat},${c.max_lng},${c.min_lat}`;
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`
+        + `&countrycodes=cn&limit=5&addressdetails=1&viewbox=${viewbox}&bounded=1`;
     
     const response = await fetch(url, {
         headers: {
@@ -394,12 +457,13 @@ async function searchAddress(query) {
     
     const data = await response.json();
     
+    // bounded=1 理论上够了，这里再滤一道，避免服务端忽略参数时漏过去
     return data.map(item => ({
         name: item.display_name.split(',')[0],
         address: item.display_name,
         lat: parseFloat(item.lat),
         lng: parseFloat(item.lon)
-    }));
+    })).filter(r => inCoverage(r.lat, r.lng));
 }
 
 /**
@@ -446,6 +510,8 @@ function hideSearchResults() {
 function selectSearchResult(result) {
     hideSearchResults();
     document.getElementById('search-input').value = result.name;
+
+    if (rejectOutside(result.lat, result.lng, `「${result.name}」`)) return;
     
     // 跳转到该位置
     state.map.setView([result.lat, result.lng], 16);
@@ -486,6 +552,14 @@ function handleLocate() {
             locateBtn.classList.remove('locating');
             locateBtn.textContent = '📍';
             
+            // 当前位置多半不在这块数据里，给出明确说明而不是算个错的
+            if (!inCoverage(latitude, longitude)) {
+                showToast(`你的位置不在可分析范围内，已带你到${CONFIG.coverage.name}`, 'info');
+                state.map.flyTo(CONFIG.defaultCenter, CONFIG.defaultZoom);
+                flashCoverage();
+                return;
+            }
+
             // 跳转到当前位置
             state.map.setView([latitude, longitude], 16);
             
@@ -661,7 +735,10 @@ function updateFilterAllCheckbox() {
  */
 async function handleMapClick(e) {
     const { lat, lng } = e.latlng;
-    
+
+    // 框外没有路网，算出来的等时圈会从一个无关的节点起算，所以直接挡掉
+    if (rejectOutside(lat, lng, '该位置')) return;
+
     // 更新选中位置
     state.selectedLocation = { lat, lng };
     updateLocationDisplay(lat, lng);
@@ -878,6 +955,16 @@ async function analyzePoint(lng, lat) {
         addProgressItem('正在解析服务器响应...');
         await delay(30);
         
+        // 422 是后端的范围守卫：起点不在数据里，或附近没有可起算的路网节点。
+        // 这不是故障，给用户一句人话，不要走通用报错。
+        if (response.status === 422) {
+            const detail = await response.json().catch(() => ({}));
+            hideProgress();
+            showToast(detail.message || '该点无法分析', 'error');
+            flashCoverage();
+            return;
+        }
+
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -1651,80 +1738,92 @@ function getRadarShortName(name) {
 // ============================================
 
 /**
- * 初始化城市选择器
+ * 初始化区域选择器
+ *
+ * 原来是三个城市的下拉框。现在只有一块区域真的有数据，
+ * 另外两个保留为不可选项，标注原因。
  */
 function initCitySelector() {
     const selector = document.getElementById('city-selector');
     if (!selector) return;
-    
-    // 填充城市选项
-    selector.innerHTML = Object.entries(CITIES).map(([key, city]) => 
-        `<option value="${key}" ${key === CONFIG.currentCity ? 'selected' : ''}>${city.name}</option>`
-    ).join('');
-    
-    // 监听切换事件
-    selector.addEventListener('change', (e) => {
-        switchCity(e.target.value);
+
+    const cov = CONFIG.coverage;
+    const opts = [`<option value="coverage" selected>${cov.name}</option>`]
+        .concat(UNAVAILABLE_CITIES.map(n => `<option disabled>${n}（暂无数据）</option>`));
+    selector.innerHTML = opts.join('');
+
+    // 只剩一个可选项，交互上没有意义，但保留控件让"少了什么"看得见
+    selector.disabled = UNAVAILABLE_CITIES.length === 0;
+
+    selector.addEventListener('change', () => {
+        selector.value = 'coverage';
     });
-    
-    // 更新城市信息显示
+
     updateCityInfo();
 }
 
 /**
- * 切换城市
- */
-function switchCity(cityKey) {
-    if (!CITIES[cityKey]) return;
-    
-    CONFIG.currentCity = cityKey;
-    const city = CITIES[cityKey];
-    
-    // 清除当前分析结果
-    clearAnalysis();
-    
-    // 更新地图视图和边界
-    const bounds = L.latLngBounds(city.bounds);
-    state.map.setMaxBounds(bounds.pad(0.1));
-    state.map.flyTo(city.center, city.zoom);
-    
-    // 更新边界矩形
-    updateCityBoundsRect();
-    
-    // 更新城市信息
-    updateCityInfo();
-    
-    console.log(`已切换到：${city.name}`);
-}
-
-/**
- * 更新城市边界矩形显示
+ * 画出可分析区域：区域外压暗 + 区域轮廓
+ *
+ * 路网是按矩形裁的，所以这个矩形是真实边界而非外接近似。
  */
 function updateCityBoundsRect() {
-    // 移除旧的边界
-    if (state.cityBoundsRect) {
-        state.map.removeLayer(state.cityBoundsRect);
-    }
-    
-    const bounds = CONFIG.cityBounds;
-    state.cityBoundsRect = L.rectangle(bounds, {
-        color: '#3498db',
-        weight: 2,
-        fillOpacity: 0,
-        dashArray: '5, 5',
+    const c = CONFIG.coverage;
+    const rect = [[c.min_lat, c.min_lng], [c.max_lat, c.max_lng]];
+
+    if (state.coverageMask) state.map.removeLayer(state.coverageMask);
+    if (state.coverageRect) state.map.removeLayer(state.coverageRect);
+
+    // 外环取全球、内环取数据矩形，SVG 的 even-odd 填充规则会把内环挖空，
+    // 于是「区域外」被压暗，「区域内」保持清晰。
+    // 纬度只能取到 ±85：Web 墨卡托在两极是发散的，写 ±90 会投影出一个
+    // 极大的 Y 值，SVG 渲染会出问题。
+    const world = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+    const hole = [
+        [c.min_lat, c.min_lng], [c.min_lat, c.max_lng],
+        [c.max_lat, c.max_lng], [c.max_lat, c.min_lng]
+    ];
+    state.coverageMask = L.polygon([world, hole], {
+        stroke: false,
+        fillColor: '#0f172a',
+        fillOpacity: 0.45,
         interactive: false
     }).addTo(state.map);
+
+    state.coverageRect = L.rectangle(rect, {
+        color: '#2563eb',
+        weight: 2.5,
+        fillOpacity: 0,
+        interactive: false
+    }).addTo(state.map);
+
+    // 标签贴在矩形上边缘外侧。直接 bindTooltip 到矩形会挂在它的几何中心，
+    // 而中心正是用户最想点的地方，permanent 标签杵在那儿碍事。
+    if (state.coverageTip) state.map.removeLayer(state.coverageTip);
+    state.coverageTip = L.tooltip({
+        permanent: true,
+        direction: 'top',
+        className: 'coverage-label',
+        interactive: false
+    })
+        .setContent('可分析区域')
+        .setLatLng([c.max_lat, (c.min_lng + c.max_lng) / 2])
+        .addTo(state.map);
 }
 
 /**
- * 更新城市信息显示
+ * 更新区域信息显示
  */
 function updateCityInfo() {
-    const city = CITIES[CONFIG.currentCity];
+    const cov = CONFIG.coverage;
     const infoEl = document.getElementById('city-info');
-    if (infoEl) {
-        infoEl.textContent = city.description;
-    }
+    if (!infoEl) return;
+    const w = cov.span_lng_km ? cov.span_lng_km.toFixed(1) : '?';
+    const h = cov.span_lat_km ? cov.span_lat_km.toFixed(1) : '?';
+    infoEl.innerHTML =
+        `${cov.description || ''}<br>` +
+        `<span class="coverage-stats">约 ${w}×${h} km · ${cov.ways} 条道路 · ${cov.pois} 个 POI</span><br>` +
+        `<span class="coverage-hint">仅蓝框内可分析，框外无路网数据</span>`;
 }
 
 /**

@@ -2,6 +2,12 @@
 .git
 .gitignore
 
+# 凭据：.env 里是数据库口令。即使 Dockerfile 不 COPY 它，构建上下文也会被
+# 整包发给 docker daemon，且一旦有人加了 COPY . . 就会直接进镜像层。
+.env
+.env.*
+!.env.example
+
 # IDE
 .vscode
 .idea

@@ -12,9 +12,11 @@
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
     
     <link rel="stylesheet" href="/static/css/style.css">
-    
-    <!-- Umami Analytics -->
-    <script defer src="https://stats.woodland-mango.click/script.js" data-website-id="1a0eb539-3ef9-434c-8847-2f7f3482f53a"></script>
+
+    <!-- 原本这里有一个指向 stats.woodland-mango.click 的 Umami 统计脚本，已移除：
+         该域名属于上一台服务器（旧资产），域名一旦到期或易主，就等于在本站上
+         执行任意第三方 JS，而它连 SRI 都没有。主站也是零第三方脚本，保持一致。
+         要恢复统计就把 Umami 自托管到本域名下。 -->
 </head>
 <body>
     <div class="app-container">
@@ -36,13 +38,13 @@
             <div class="sidebar-content">
                 <!-- 城市选择 -->
                 <section class="panel" id="city-panel">
-                    <h3>🏙️ 选择城市</h3>
+                    <h3>🗺️ 可分析区域</h3>
                     <div class="city-selector-container">
                         <select id="city-selector" class="city-selector">
                             <!-- 由 JS 动态填充 -->
                         </select>
                     </div>
-                    <p class="city-info" id="city-info">浙江省杭州市</p>
+                    <p class="city-info" id="city-info">加载中…</p>
                 </section>
 
                 <!-- 地址搜索 -->
@@ -236,8 +238,11 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     
-    <!-- ECharts 雷达图 -->
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <!-- ECharts 雷达图。Leaflet 两个标签本来就带 SRI，这个之前漏了，
+         补上后三个 CDN 资源都做完整性校验，CDN 被投毒时浏览器会拒绝执行。 -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"
+            integrity="sha256-EVZCmhajjLhgTcxlGMGUBtQiYULZCPjt0uNTFEPFTRk="
+            crossorigin="anonymous"></script>
     
     <script src="/static/js/app.js"></script>
 </body>

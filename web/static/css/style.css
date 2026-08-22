@@ -1402,3 +1402,46 @@ body {
         padding: 8px 16px;
     }
 }
+
+
+/* ============================================
+   可分析区域提示
+   ============================================ */
+
+/* 地图上贴在蓝框顶边的标签 */
+.coverage-label {
+    background: #2563eb;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+
+.coverage-label::before {
+    border-top-color: #2563eb;
+}
+
+/* 侧栏里的规模说明 */
+.coverage-stats {
+    color: #64748b;
+    font-size: 12px;
+}
+
+/* 「框外不可分析」这句要能一眼看到 */
+.coverage-hint {
+    color: #b45309;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* 选择器里没有数据的城市 */
+.city-selector option:disabled {
+    color: #94a3b8;
+}
+
+.toast.info {
+    background: #2563eb;
+}
