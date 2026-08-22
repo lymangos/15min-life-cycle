@@ -81,12 +81,18 @@ func (s *IsochroneService) CalculateAsGeoJSON(ctx context.Context, req *model.Is
 	if err != nil {
 		return nil, err
 	}
+	return ToFeatureCollection(result), nil
+}
 
+// ToFeatureCollection 把已算好的等时圈结果转成 FeatureCollection。
+//
+// 单独拆出来是因为调用方常常两样都要：要 GeoJSON 给前端画，
+// 又要原始多边形自己做几何运算。以前那种"先 CalculateAsGeoJSON 再 Calculate"
+// 的写法会把整个等时圈计算跑两遍——在这台机器上是白扔一秒多。
+func ToFeatureCollection(result *model.IsochroneResult) *model.FeatureCollection {
 	fc := model.NewFeatureCollection()
 
-	// 按时间从大到小排序，便于前端渲染（大的在底层）
-	for i := len(result.Polygons) - 1; i >= 0; i-- {
-		p := result.Polygons[i]
+	for _, p := range result.Polygons {
 		feature := model.Feature{
 			Type:     "Feature",
 			Geometry: p.Geometry,
@@ -105,7 +111,7 @@ func (s *IsochroneService) CalculateAsGeoJSON(ctx context.Context, req *model.Is
 	})
 	fc.AddFeature(originFeature)
 
-	return fc, nil
+	return fc
 }
 
 // GetReachableRoads 获取可达道路网络

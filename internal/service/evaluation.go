@@ -40,7 +40,9 @@ func (s *EvaluationService) Evaluate(ctx context.Context, req *model.EvaluationR
 			grade,
 			category,
 			category_name,
-			cat_weight,
+			-- 函数 RETURNS TABLE 声明的就是 category_weight；
+			-- 这里原本写的 cat_weight 在库里不存在，/analyze 因此一直 500
+			category_weight,
 			category_score,
 			weighted_score,
 			poi_count,
@@ -122,18 +124,18 @@ func (s *EvaluationService) Evaluate(ctx context.Context, req *model.EvaluationR
 		TimeThresholds: []int{5, 10, 15},
 		WalkSpeed:      req.WalkSpeed,
 	}
+	// 等时圈只算一次：FeatureCollection 给前端，15 分钟那圈的原始几何用于过滤 POI。
+	// 这里原本调完 CalculateAsGeoJSON 又调了一次 Calculate，而前者内部就是后者，
+	// 等于把整个等时圈计算重跑一遍，白白多花一秒以上。
 	var iso15GeoJSON string
-	if isoFC, err := isoService.CalculateAsGeoJSON(ctx, isoReq); err == nil {
-		result.Isochrone = isoFC
-		// 获取15分钟等时圈的GeoJSON用于过滤POI
-		if isoResult, err := isoService.Calculate(ctx, isoReq); err == nil {
-			for _, poly := range isoResult.Polygons {
-				if poly.Minutes == 15 {
-					if geojsonBytes, err := json.Marshal(poly.Geometry); err == nil {
-						iso15GeoJSON = string(geojsonBytes)
-					}
-					break
+	if isoResult, err := isoService.Calculate(ctx, isoReq); err == nil {
+		result.Isochrone = ToFeatureCollection(isoResult)
+		for _, poly := range isoResult.Polygons {
+			if poly.Minutes == 15 {
+				if geojsonBytes, err := json.Marshal(poly.Geometry); err == nil {
+					iso15GeoJSON = string(geojsonBytes)
 				}
+				break
 			}
 		}
 	}
